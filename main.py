@@ -1,4 +1,5 @@
 import math
+from enum import Enum
 
 import pygame
 import numpy as np
@@ -82,11 +83,44 @@ def compose_matrix(translation: NDArray, scale: NDArray, rotation: NDArray) -> N
     return mat
 
 
+def distance_squared(a: NDArray, b: NDArray) -> NDArray:
+    l0 = a[0] - b[0]
+    l1 = a[1] - b[1]
+    l2 = a[2] - b[2]
+    return l0 * l0 + l1 * l1 + l2 * l2
+
+
+def zero_distance_squared(v: NDArray) -> NDArray:
+    return v[0] * v[0] + v[1] * v[1] + v[2] * v[2]
+
+
 class Geometry:
     def __init__(self):
-        self.vertex_buffer = np.empty((0,))
-        self.index_buffer = np.empty((0,))
-        self.colour_buffer = np.empty((0,))
+        self._vertex_buffer: NDArray = np.empty((0,))
+        self.index_buffer: NDArray = np.empty((0,))
+        self.colour_buffer: NDArray = np.empty((0,))
+        self.bounding_sphere: float = 0
+
+    @property
+    def vertex_buffer(self) -> NDArray:
+        return self._vertex_buffer
+
+    @vertex_buffer.setter
+    def vertex_buffer(self, value: NDArray):
+        if value.shape[1] == 3:  # if not already padded, one-time pre-pad for performance
+            self._vertex_buffer = np.pad(value, [(0, 0), (0, 1)], mode="constant", constant_values=1)
+        else:
+            self._vertex_buffer = value
+        self.bounding_sphere = self.compute_bounding_sphere()
+
+    def compute_bounding_sphere(self):
+        r_squared = 0
+        for vertex in self.vertex_buffer:
+            current_r_squared = zero_distance_squared(vertex)
+            if current_r_squared > r_squared:
+                r_squared = current_r_squared
+
+        return np.sqrt(r_squared)
 
 
 class Object3D:
@@ -164,9 +198,15 @@ class Camera(Object3D):
         self.update_view_matrix()
 
 
+class WindingOrder(Enum):
+    CLOCKWISE = False
+    ANTICLOCKWISE = True
+
+
 class Renderer:
     def __init__(self):
-        pass
+        self.winding_order: WindingOrder = WindingOrder.ANTICLOCKWISE
+        self.face_culling: bool = True
 
     @staticmethod
     def apply_transforms(vertex_buffer: NDArray, model_matrix: NDArray, view_matrix: NDArray, projection_matrix: NDArray) -> NDArray:
@@ -187,10 +227,14 @@ class Renderer:
     def on_surface(surface: pygame.surface.Surface, point: NDArray):
         return 0 < point[0] < surface.get_width() and 0 < point[1] < surface.get_height()
 
-    def transform(self, camera: Camera, game_object: Mesh, surface: pygame.Surface):
+    def front_facing(self, a, b, c):
+        n = np.dot(a, np.cross(b - a, c - a))
+        return n == 0 or n > 0 != self.winding_order
+
+    def transform(self, camera: Camera, mesh: Mesh, surface: pygame.Surface):
         clip = self.apply_transforms(
-            np.pad(game_object.geometry.vertex_buffer, [(0, 1), (0, 0)], mode="constant", constant_values=1),
-            game_object.model_matrix,
+            mesh.geometry.vertex_buffer.T,
+            mesh.model_matrix,
             camera.view_matrix,
             camera.projection_matrix
         )
@@ -231,22 +275,30 @@ class Renderer:
             vertex = viewport[r]
             if clip[2, r] > 0:  # in front of camera
                 screen = vertex[:2]
-                if np.isfinite(screen).all():
-                    # print(screen)
-                    pygame.draw.circle(surface, (255, 0, 0), screen, radius)
+                pygame.draw.circle(surface, (255, 0, 0), screen, radius)
+                # if np.isfinite(screen).all():
+                #     # print(screen)
+
 
     def draw_triangles(self, camera: Camera, mesh: Mesh, surface: pygame.Surface):
         clip, viewport = self.transform(camera, mesh, surface)
 
         for i in range(0, mesh.geometry.index_buffer.shape[0], 3):
             indices = mesh.geometry.index_buffer[i:i + 3]
-            if clip[2, indices[0]] > 0 or clip[2, indices[1]] > 0 or clip[2, indices[2]] > 0:
-                screen1 = viewport[indices[0]][:2]
-                screen2 = viewport[indices[1]][:2]
-                screen3 = viewport[indices[2]][:2]
 
-                if np.isfinite(screen1).all() and np.isfinite(screen2).all() and np.isfinite(screen3).all() and self.on_surface(surface, screen1) and self.on_surface(surface, screen2) and self.on_surface(surface, screen3):
-                    pygame.draw.polygon(surface, (255, 0, 0), [screen1, screen2, screen3])
+            c0 = clip[:3, indices[0]].T
+            c1 = clip[:3, indices[1]].T
+            c2 = clip[:3, indices[2]].T
+
+            # if clip[2, indices[0]] > 0 or clip[2, indices[1]] > 0 or clip[2, indices[2]] > 0:
+            if c0[2] > 0 or c1[2] > 0 or c2[2] > 0:
+                s0 = viewport[indices[0]][:2]
+                s1 = viewport[indices[1]][:2]
+                s2 = viewport[indices[2]][:2]
+
+                if not self.face_culling or self.front_facing(c0, c1, c2):
+                    if self.on_surface(surface, s0) and self.on_surface(surface, s1) and self.on_surface(surface, s2):
+                        pygame.draw.polygon(surface, (255, 0, 0), [s0, s1, s2])
 
 
 CAMERA_SPEED = 5
@@ -261,6 +313,7 @@ if __name__ == '__main__':
     # print(camera.model_matrix, camera.view_matrix)
     # camera._view_matrix = compose_matrix(np.array([0, 0, -10]), np.ones((3,)), np.identity(3))
     renderer = Renderer()
+    renderer.face_culling = False
 
     rotation_matrix = compose_matrix(np.ones((3,)), np.ones((3,)), rotation_matrix_z(math.pi * 0.5))
     vertex_buffer = np.array([
@@ -272,25 +325,25 @@ if __name__ == '__main__':
         [1, -1, 1],  # bottom right front 5
         [-1, 1, 1],  # top left front 6
         [1, 1, 1],  # top right front 7
-    ]).T
+    ])
     index_buffer = np.array([
         # front
-        0, 1, 2,
+        0, 2, 1,
         2, 3, 1,
         # back
         4, 5, 6,
-        6, 7, 5,
+        6, 5, 7,
         # bottom
-        0, 4, 5,
+        0, 5, 4,
         0, 1, 5,
         # top
         2, 6, 7,
-        2, 3, 7,
+        2, 7, 3,
         # left
         0, 4, 2,
-        2, 6, 4,
+        2, 4, 6,
         # right
-        1, 5, 3,
+        1, 3, 5,
         3, 7, 5,
     ])
 
@@ -340,14 +393,14 @@ if __name__ == '__main__':
         renderer.draw_points(camera, mesh, screen)
         renderer.draw_triangles(camera, mesh, screen)
 
-        # for mesh in meshes:
-        #     renderer.draw_points(camera, mesh, screen)
-        #     renderer.draw_triangles(camera, mesh, screen)
+        for mesh in meshes:
+            renderer.draw_points(camera, mesh, screen)
+            renderer.draw_triangles(camera, mesh, screen)
 
         if delta_time != 0:
             delta_times.append(delta_time)
 
-            if len(delta_times) > 64:
+            if len(delta_times) > 256:
                 del delta_times[0]
 
             font.render_to(screen, (10, 10), f"{1 / delta_time:.1f}", (0, 0, 0))
