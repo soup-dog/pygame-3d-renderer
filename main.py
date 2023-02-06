@@ -183,8 +183,13 @@ class Renderer:
         return ndc * np.array([[half_width, half_height, (f - n) / 2]]).T + np.array([[x + half_width, y + half_height, (f + n) / 2]]).T
         # return ndc + np.array([[2, 1, 1]]).T
 
-    def draw_points(self, camera: Camera, game_object: Mesh, surface: pygame.Surface, radius: float = 2):
-        clip = self.apply_transforms(game_object.geometry.vertex_buffer, game_object.model_matrix, camera.view_matrix, camera.projection_matrix)
+    def transform(self, camera: Camera, game_object: Mesh, surface: pygame.Surface):
+        clip = self.apply_transforms(
+            np.pad(game_object.geometry.vertex_buffer, [(0, 1), (0, 0)], mode="constant", constant_values=1),
+            game_object.model_matrix,
+            camera.view_matrix,
+            camera.projection_matrix
+        )
         # print(clip)
         # print("clip")
         # print(clip)
@@ -195,10 +200,27 @@ class Renderer:
         # print(ndc)
         size = surface.get_size()
         viewport = self.viewport_transform(ndc, 0, 0, size[0], size[1], camera.f, camera.n).T
-        # print("viewport")
-        # print(viewport)
 
-        # print(viewport)
+        return clip, viewport
+
+    def draw_points(self, camera: Camera, mesh: Mesh, surface: pygame.Surface, radius: float = 2):
+        # clip = self.apply_transforms(game_object.geometry.vertex_buffer, game_object.model_matrix, camera.view_matrix, camera.projection_matrix)
+        # # print(clip)
+        # # print("clip")
+        # # print(clip)
+        # # print(clip, clip[3])
+        # ndc = (clip / clip[3])[:3]
+        # # print(ndc)
+        # # print("ndc")
+        # # print(ndc)
+        # size = surface.get_size()
+        # viewport = self.viewport_transform(ndc, 0, 0, size[0], size[1], camera.f, camera.n).T
+        # # print("viewport")
+        # # print(viewport)
+        #
+        # # print(viewport)
+
+        clip, viewport = self.transform(camera, mesh, surface)
 
         for r in range(viewport.shape[0]):
             # print(vertex)
@@ -209,8 +231,18 @@ class Renderer:
                     # print(screen)
                     pygame.draw.circle(surface, (255, 0, 0), screen, radius)
 
-    def draw_triangle(self, surface: pygame.Surface):
-        pass
+    def draw_triangles(self, camera: Camera, mesh: Mesh, surface: pygame.Surface):
+        clip, viewport = self.transform(camera, mesh, surface)
+
+        for i in range(0, mesh.geometry.index_buffer.shape[0], 3):
+            indices = mesh.geometry.index_buffer[i:i+3]
+            # if clip[2, indices[0]] or clip[2, indices[1]] or clip[2, indices[2]]:
+
+            screen1 = viewport[indices[0]][:2]
+            screen2 = viewport[indices[1]][:2]
+            screen3 = viewport[indices[2]][:2]
+
+            pygame.draw.polygon(surface, (255, 0, 0), [screen1, screen2, screen3])
 
 
 CAMERA_SPEED = 5
@@ -218,6 +250,8 @@ CAMERA_SPEED = 5
 
 if __name__ == '__main__':
     screen = pygame.display.set_mode((500, 500))
+    font = pygame.freetype.SysFont("Segoe UI", 24)
+
     camera = Camera(1.0, 3.0, 0.5)
     camera.position = np.array([0, 0, 10], dtype=np.float64)
     # print(camera.model_matrix, camera.view_matrix)
@@ -226,20 +260,41 @@ if __name__ == '__main__':
 
     rotation_matrix = compose_matrix(np.ones((3,)), np.ones((3,)), rotation_matrix_z(math.pi * 0.5))
     vertex_buffer = np.array([
-        [-1, -1, -1, 1],
-        [1, -1, -1, 1],
-        [-1, 1, -1, 1],
-        [1, 1, -1, 1],
-        [-1, -1, 1, 1],
-        [1, -1, 1, 1],
-        [-1, 1, 1, 1],
-        [1, 1, 1, 1],
+        [-1, -1, -1],  # bottom left back 0
+        [1, -1, -1],  # bottom right back 1
+        [-1, 1, -1],  # top left back 2
+        [1, 1, -1],  # top right back 3
+        [-1, -1, 1],  # bottom left front 4
+        [1, -1, 1],  # bottom right front 5
+        [-1, 1, 1],  # top left front 6
+        [1, 1, 1],  # top right front 7
     ]).T
+    index_buffer = np.array([
+        # front
+        0, 1, 2,
+        2, 3, 1,
+        # back
+        4, 5, 6,
+        6, 7, 5,
+        # bottom
+        0, 4, 5,
+        0, 1, 5,
+        # top
+        2, 6, 7,
+        2, 3, 7,
+        # left
+        0, 4, 2,
+        2, 6, 4,
+        # right
+        1, 5, 3,
+        3, 7, 5,
+    ])
 
     # print(vertex_buffer)
 
     geometry = Geometry()
     geometry.vertex_buffer = vertex_buffer
+    geometry.index_buffer = index_buffer
     material = None
     mesh = Mesh(geometry, material)
 
@@ -276,5 +331,8 @@ if __name__ == '__main__':
         screen.fill((255, 255, 255))
 
         renderer.draw_points(camera, mesh, screen)
+        renderer.draw_triangles(camera, mesh, screen)
+
+        font.render_to(screen, (10, 10), f"{1 / delta_time if delta_time != 0 else 0}", (0, 0, 0))
 
         pygame.display.flip()
