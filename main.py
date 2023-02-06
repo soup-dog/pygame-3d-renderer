@@ -183,6 +183,10 @@ class Renderer:
         return ndc * np.array([[half_width, half_height, (f - n) / 2]]).T + np.array([[x + half_width, y + half_height, (f + n) / 2]]).T
         # return ndc + np.array([[2, 1, 1]]).T
 
+    @staticmethod
+    def on_surface(surface: pygame.surface.Surface, point: NDArray):
+        return 0 < point[0] < surface.get_width() and 0 < point[1] < surface.get_height()
+
     def transform(self, camera: Camera, game_object: Mesh, surface: pygame.Surface):
         clip = self.apply_transforms(
             np.pad(game_object.geometry.vertex_buffer, [(0, 1), (0, 0)], mode="constant", constant_values=1),
@@ -235,14 +239,14 @@ class Renderer:
         clip, viewport = self.transform(camera, mesh, surface)
 
         for i in range(0, mesh.geometry.index_buffer.shape[0], 3):
-            indices = mesh.geometry.index_buffer[i:i+3]
-            # if clip[2, indices[0]] or clip[2, indices[1]] or clip[2, indices[2]]:
+            indices = mesh.geometry.index_buffer[i:i + 3]
+            if clip[2, indices[0]] > 0 or clip[2, indices[1]] > 0 or clip[2, indices[2]] > 0:
+                screen1 = viewport[indices[0]][:2]
+                screen2 = viewport[indices[1]][:2]
+                screen3 = viewport[indices[2]][:2]
 
-            screen1 = viewport[indices[0]][:2]
-            screen2 = viewport[indices[1]][:2]
-            screen3 = viewport[indices[2]][:2]
-
-            pygame.draw.polygon(surface, (255, 0, 0), [screen1, screen2, screen3])
+                if np.isfinite(screen1).all() and np.isfinite(screen2).all() and np.isfinite(screen3).all() and self.on_surface(surface, screen1) and self.on_surface(surface, screen2) and self.on_surface(surface, screen3):
+                    pygame.draw.polygon(surface, (255, 0, 0), [screen1, screen2, screen3])
 
 
 CAMERA_SPEED = 5
@@ -297,6 +301,7 @@ if __name__ == '__main__':
     geometry.index_buffer = index_buffer
     material = None
     mesh = Mesh(geometry, material)
+    meshes = [Mesh(geometry, material) for i in range(100)]
 
     # world = mesh.model_matrix.dot(vertex_buffer)
     # print(world)
@@ -306,6 +311,8 @@ if __name__ == '__main__':
     # print(clip)
 
     clock = pygame.time.Clock()
+
+    delta_times = []
 
     while True:
         delta_time = clock.tick() / 1000
@@ -333,6 +340,17 @@ if __name__ == '__main__':
         renderer.draw_points(camera, mesh, screen)
         renderer.draw_triangles(camera, mesh, screen)
 
-        font.render_to(screen, (10, 10), f"{1 / delta_time if delta_time != 0 else 0}", (0, 0, 0))
+        # for mesh in meshes:
+        #     renderer.draw_points(camera, mesh, screen)
+        #     renderer.draw_triangles(camera, mesh, screen)
+
+        if delta_time != 0:
+            delta_times.append(delta_time)
+
+            if len(delta_times) > 64:
+                del delta_times[0]
+
+            font.render_to(screen, (10, 10), f"{1 / delta_time:.1f}", (0, 0, 0))
+            font.render_to(screen, (10, 50), f"{1 / (sum(delta_times) / len(delta_times)):.1f}", (0, 0, 0))
 
         pygame.display.flip()
