@@ -1,9 +1,18 @@
+from __future__ import annotations
+
 import math
+import time
 from enum import Enum
+from typing import List, Tuple
+import pickle
+import hashlib
+import timeit
 
 import pygame
+import pygame.gfxdraw
 import numpy as np
 from numpy.typing import NDArray
+from line_profiler_pycharm import profile
 
 
 np.set_printoptions(suppress=True)
@@ -83,6 +92,10 @@ def compose_matrix(translation: NDArray, scale: NDArray, rotation: NDArray) -> N
     return mat
 
 
+def get_scale(mat: NDArray) -> NDArray:
+    return np.array([magnitude(mat[0, :3]), magnitude(mat[1, :3]), magnitude(mat[2, :3])])
+
+
 def distance_squared(a: NDArray, b: NDArray) -> NDArray:
     l0 = a[0] - b[0]
     l1 = a[1] - b[1]
@@ -90,8 +103,126 @@ def distance_squared(a: NDArray, b: NDArray) -> NDArray:
     return l0 * l0 + l1 * l1 + l2 * l2
 
 
-def zero_distance_squared(v: NDArray) -> NDArray:
+def magnitude_squared(v: NDArray) -> float:
     return v[0] * v[0] + v[1] * v[1] + v[2] * v[2]
+
+
+def magnitude(v: NDArray) -> float:
+    return np.sqrt(magnitude_squared(v))
+
+
+def normalise(v: NDArray) -> float:
+    return v / magnitude(v)
+
+
+def v3_to_column_v4(vector: NDArray) -> NDArray:
+    array = np.empty((4, 1))
+    array[0, 0] = vector[0]
+    array[1, 0] = vector[1]
+    array[2, 0] = vector[2]
+    array[3, 0] = 1
+    return array
+
+
+def column_v4_to_v3(vector: NDArray) -> NDArray:
+    return vector[:3, 0].flatten()
+
+
+class Plane:
+    def __init__(self, normal: NDArray, distance: float):
+        self.normal: NDArray = normal
+        self.distance: float = distance
+
+    @staticmethod
+    def from_point_normal(point: NDArray, normal: NDArray):
+        return Plane(
+            normal=normalise(normal),
+            distance=(-normal[0] * point[0] - normal[1] * point[1] - normal[2] * point[2]) / magnitude(normal)
+        )
+
+    def signed_distance_to(self, point: NDArray) -> float:
+        return np.dot(self.normal, point) + self.distance
+
+
+class Frustum:
+    def __init__(self, near: Plane, far: Plane, left: Plane, right: Plane, top: Plane, bottom: Plane):
+        self.near: Plane = near
+        self.far: Plane = far
+        self.left: Plane = left
+        self.right: Plane = right
+        self.top: Plane = top
+        self.bottom: Plane = bottom
+
+    @staticmethod
+    def from_camera(camera: Camera, fov: float, aspect: float) -> Frustum:
+        # from https://learnopengl.com/Guest-Articles/2021/Scene/Frustum-Culling
+        # swapped left + right plane parameter positions because im a masochist
+        half_v_side = camera.f * np.tan(fov * 0.5)
+        half_h_side = half_v_side * aspect
+        far = camera.f * camera.front
+
+        return Frustum(
+            near=Plane.from_point_normal(camera.position + camera.n * camera.front, camera.front),  # near
+            far=Plane.from_point_normal(camera.position + far, -camera.front),  # far
+            left=Plane.from_point_normal(camera.position, np.cross(camera.up, far + camera.right * half_h_side)),  # left
+            right=Plane.from_point_normal(camera.position, np.cross(far - camera.right * half_h_side, camera.up)),  # right
+            top=Plane.from_point_normal(camera.position, np.cross(camera.right, far - camera.up * half_v_side)),  # top
+            bottom=Plane.from_point_normal(camera.position, np.cross(far + camera.up * half_v_side, camera.right)),  # bottom
+        )
+
+
+class BoundingSphere:
+    def __init__(self, centre: NDArray = None, radius: float = 0):
+        if centre is None:
+            centre = np.zeros((3,))
+        self.centre: NDArray = centre
+        self.radius: float = radius
+
+    def above_plane(self, plane: Plane):
+        return plane.signed_distance_to(self.centre) > -self.radius
+
+    def in_frustum(self, frustum: Frustum):\
+        return self.above_plane(frustum.near) \
+            and self.above_plane(frustum.far) \
+            and self.above_plane(frustum.left) \
+            and self.above_plane(frustum.right) \
+            and self.above_plane(frustum.top) \
+            and self.above_plane(frustum.bottom)
+
+
+class AABB:
+    def __init__(self, lower: NDArray = None, upper: NDArray = None):
+        if lower is None:
+            lower = np.zeros((3,))
+        if upper is None:
+            upper = np.zeros((3,))
+        self.lower: NDArray = lower
+        self.upper: NDArray = upper
+
+    @staticmethod
+    def from_geometry(geometry: Geometry):
+        min_x = np.inf
+        min_y = np.inf
+        min_z = np.inf
+        max_x = -np.inf
+        max_y = -np.inf
+        max_z = -np.inf
+
+        for vertex in geometry.vertex_buffer.T:
+            if vertex[0] < min_x:
+                min_x = vertex[0]
+            if vertex[1] < min_y:
+                min_y = vertex[1]
+            if vertex[2] < min_z:
+                min_z = vertex[2]
+            if vertex[0] > max_x:
+                max_x = vertex[0]
+            if vertex[1] > max_y:
+                max_y = vertex[1]
+            if vertex[2] > max_z:
+                max_z = vertex[2]
+
+        return AABB(np.array([min_x, min_y, min_z]), np.array([max_x, max_y, max_z]))
 
 
 class Geometry:
@@ -99,7 +230,8 @@ class Geometry:
         self._vertex_buffer: NDArray = np.empty((0,))
         self.index_buffer: NDArray = np.empty((0,))
         self.colour_buffer: NDArray = np.empty((0,))
-        self.bounding_sphere: float = 0
+        self.aabb: AABB = AABB()
+        self.bounding_sphere: BoundingSphere = BoundingSphere()
 
     @property
     def vertex_buffer(self) -> NDArray:
@@ -107,72 +239,99 @@ class Geometry:
 
     @vertex_buffer.setter
     def vertex_buffer(self, value: NDArray):
-        if value.shape[1] == 3:  # if not already padded, one-time pre-pad for performance
-            self._vertex_buffer = np.pad(value, [(0, 0), (0, 1)], mode="constant", constant_values=1)
+        if value.shape[0] == 3:  # if not already padded, one-time pre-pad for performance
+            self._vertex_buffer = np.pad(value, [(0, 1), (0, 0)], mode="constant", constant_values=1)
         else:
             self._vertex_buffer = value
+        self.aabb = AABB.from_geometry(self)
         self.bounding_sphere = self.compute_bounding_sphere()
 
-    def compute_bounding_sphere(self):
-        r_squared = 0
-        for vertex in self.vertex_buffer:
-            current_r_squared = zero_distance_squared(vertex)
-            if current_r_squared > r_squared:
-                r_squared = current_r_squared
+    # def compute_aabb(self) -> Tuple[NDArray, NDArray]:
+    #     min_x = np.inf
+    #     min_y = np.inf
+    #     min_z = np.inf
+    #     max_x = -np.inf
+    #     max_y = -np.inf
+    #     max_z = -np.inf
+    #
+    #     for vertex in self._vertex_buffer.T:
+    #         if vertex[0] < min_x:
+    #             min_x = vertex[0]
+    #         if vertex[1] < min_y:
+    #             min_y = vertex[1]
+    #         if vertex[2] < min_z:
+    #             min_z = vertex[2]
+    #         if vertex[0] > max_x:
+    #             max_x = vertex[0]
+    #         if vertex[1] > max_y:
+    #             max_y = vertex[1]
+    #         if vertex[2] > max_z:
+    #             max_z = vertex[2]
+    #
+    #     return np.array([min_x, min_y, min_z]), np.array([max_x, max_y, max_z])
+    #     # return min_x, max_x, min_y, max_y, min_z, max_z
 
-        return np.sqrt(r_squared)
+    def compute_bounding_sphere(self) -> BoundingSphere:
+        lower = self.aabb.lower
+        upper = self.aabb.upper
+        # (min_x, min_y, min_z), (max_x, max_y, max_z)
+        # print(min_x, min_y, min_z, max_x, max_y, max_z)
+
+        centre = np.array([(lower[0] + upper[0]) / 2, (lower[1] + upper[1]) / 2, (lower[2] + upper[2]) / 2])
+        edge = upper - centre
+
+        return BoundingSphere(centre, magnitude(edge))
+
+        # r_squared = 0
+        # for vertex in self.vertex_buffer:
+        #     current_r_squared = distance_squared(np.array([centre_x, centre_y, centre_z]), vertex)
+        #     if current_r_squared > r_squared:
+        #         r_squared = current_r_squared
+        #
+        # return np.sqrt(r_squared)
 
 
 class Object3D:
     def __init__(self):
-        self._position: NDArray = np.zeros((3,), dtype=np.float64)
-        self._scale: NDArray = np.ones((3,), dtype=np.float64)
-        self._rotation: NDArray = np.identity(3)
-        self._model_matrix: NDArray = np.identity(4)
-        self._matrix_needs_update: bool = False
-
-    @property
-    def model_matrix(self):
-        if self._matrix_needs_update:
-            self.update_model_matrix()
-        return self._model_matrix
-
-    @property
-    def position(self) -> NDArray:
-        return self._position
-
-    @position.setter
-    def position(self, value: NDArray):
-        self._position = value
-        self._matrix_needs_update = True
-
-    @property
-    def scale(self) -> NDArray:
-        return self._scale
-
-    @scale.setter
-    def scale(self, value: NDArray):
-        self._scale = value
-        self._matrix_needs_update = True
-
-    @property
-    def rotation(self) -> NDArray:
-        return self._rotation
-
-    @rotation.setter
-    def rotation(self, value: NDArray):
-        self._rotation = value
-        self._matrix_needs_update = True
+        self.position: NDArray = np.zeros((3,), dtype=np.float64)
+        self.scale: NDArray = np.ones((3,), dtype=np.float64)
+        self.rotation: NDArray = np.identity(3)
+        self.model_matrix = np.identity(4)
+        self._front: NDArray = np.array([0, 0, -1], dtype=np.float64)
+        self._up: NDArray = np.array([0, 1, 0], dtype=np.float64)
+        self._right: NDArray = np.array([1, 0, 0], dtype=np.float64)
 
     def update_model_matrix(self):
-        self._matrix_needs_update = False
-        self._model_matrix = compose_matrix(self._position, self._scale, self._rotation)
+        self.model_matrix = compose_matrix(self.position, self.scale, self.rotation)
+        self._front = self.rotation.dot(np.array([[0], [0], [-1]], dtype=np.float64)).flatten()
+        self._up = self.rotation.dot(np.array([[0], [1], [0]], dtype=np.float64)).flatten()
+        self._right = self.rotation.dot(np.array([[1], [0], [0]], dtype=np.float64)).flatten()
+
+    @property
+    def front(self):
+        return self._front
+
+    @property
+    def up(self):
+        return self._up
+
+    @property
+    def right(self):
+        return self._right
 
 
 class Mesh(Object3D):
     def __init__(self, geometry: Geometry, material):
         super().__init__()
         self.geometry: Geometry = geometry
+        self.material = material
+        self.bounding_sphere: BoundingSphere = geometry.bounding_sphere
+
+    def update_bounding_sphere(self):
+        centre = column_v4_to_v3(self.model_matrix.dot(v3_to_column_v4(self.geometry.bounding_sphere.centre)))
+        max_scale = get_scale(self.model_matrix).max()
+        radius = self.geometry.bounding_sphere.radius * max_scale
+        self.bounding_sphere = BoundingSphere(centre, radius)
 
 
 class Camera(Object3D):
@@ -181,21 +340,32 @@ class Camera(Object3D):
         self.s: float = s
         self.f: float = f
         self.n: float = n
+        self.fov: float = np.pi * 0.5
+        self.aspect: float = 1
+        self.frustum: Frustum = Frustum.from_camera(self, self.fov, self.aspect)
         self.projection_matrix: NDArray = perspective_matrix(s, f, n)
-        self._view_matrix: NDArray = np.identity(4)
+        self.view_matrix: NDArray = np.identity(4)
+        self.camera_matrix: NDArray = self.projection_matrix
 
-    @property
-    def view_matrix(self):
-        if self._matrix_needs_update:
-            self.update_model_matrix()
-        return self._view_matrix
+    def update_projection_matrix(self):
+        self.projection_matrix = perspective_matrix(self.s, self.f, self.n)
 
     def update_view_matrix(self):
-        self._view_matrix = np.linalg.inv(self.model_matrix)
+        self.update_model_matrix()
+        self.view_matrix = np.linalg.inv(self.model_matrix)
 
-    def update_model_matrix(self):
-        super().update_model_matrix()
+    def update_camera_matrix(self):
+        self.update_projection_matrix()
         self.update_view_matrix()
+        self.camera_matrix = self.projection_matrix.dot(self.view_matrix)
+
+    def update_frustum(self):
+        self.frustum = Frustum.from_camera(self, self.fov, self.aspect)
+
+
+class Scene:
+    def __init__(self):
+        self.children: List[Object3D] = []
 
 
 class WindingOrder(Enum):
@@ -208,9 +378,13 @@ class Renderer:
         self.winding_order: WindingOrder = WindingOrder.ANTICLOCKWISE
         self.face_culling: bool = True
 
+    # @staticmethod
+    # def apply_transforms(vertex_buffer: NDArray, model_matrix: NDArray, view_matrix: NDArray, projection_matrix: NDArray) -> NDArray:
+    #     return projection_matrix.dot(view_matrix.dot(model_matrix.dot(vertex_buffer)))
+
     @staticmethod
-    def apply_transforms(vertex_buffer: NDArray, model_matrix: NDArray, view_matrix: NDArray, projection_matrix: NDArray) -> NDArray:
-        return projection_matrix.dot(view_matrix.dot(model_matrix.dot(vertex_buffer)))
+    def apply_transforms(vertex_buffer: NDArray, model_matrix: NDArray, camera_matrix: NDArray) -> NDArray:
+        return camera_matrix.dot(model_matrix.dot(vertex_buffer))
 
     @staticmethod
     def viewport_transform(ndc: NDArray, x: float, y: float, width: float, height: float, f: float, n: float) -> NDArray:
@@ -224,8 +398,8 @@ class Renderer:
         # return ndc + np.array([[2, 1, 1]]).T
 
     @staticmethod
-    def on_surface(surface: pygame.surface.Surface, point: NDArray):
-        return 0 < point[0] < surface.get_width() and 0 < point[1] < surface.get_height()
+    def on_surface(width, height, point: NDArray):
+        return 0 < point[0] < width and 0 < point[1] < height
 
     def front_facing(self, a, b, c):
         n = np.dot(a, np.cross(b - a, c - a))
@@ -233,83 +407,117 @@ class Renderer:
 
     def transform(self, camera: Camera, mesh: Mesh, surface: pygame.Surface):
         clip = self.apply_transforms(
-            mesh.geometry.vertex_buffer.T,
+            mesh.geometry.vertex_buffer,
             mesh.model_matrix,
-            camera.view_matrix,
-            camera.projection_matrix
+            camera.camera_matrix,
         )
-        # print(clip)
-        # print("clip")
-        # print(clip)
-        # print(clip, clip[3])
         ndc = (clip / clip[3])[:3]
-        # print(ndc)
-        # print("ndc")
-        # print(ndc)
         size = surface.get_size()
         viewport = self.viewport_transform(ndc, 0, 0, size[0], size[1], camera.f, camera.n).T
 
         return clip, viewport
 
-    def draw_points(self, camera: Camera, mesh: Mesh, surface: pygame.Surface, radius: float = 2):
-        # clip = self.apply_transforms(game_object.geometry.vertex_buffer, game_object.model_matrix, camera.view_matrix, camera.projection_matrix)
-        # # print(clip)
-        # # print("clip")
-        # # print(clip)
-        # # print(clip, clip[3])
-        # ndc = (clip / clip[3])[:3]
-        # # print(ndc)
-        # # print("ndc")
-        # # print(ndc)
-        # size = surface.get_size()
-        # viewport = self.viewport_transform(ndc, 0, 0, size[0], size[1], camera.f, camera.n).T
-        # # print("viewport")
-        # # print(viewport)
-        #
-        # # print(viewport)
+    def draw_scene(self, scene: Scene, camera: Camera, surface: pygame.surface.Surface):
+        camera.update_camera_matrix()
+        camera.update_frustum()
 
-        clip, viewport = self.transform(camera, mesh, surface)
+        mesh_count = 0
 
-        for r in range(viewport.shape[0]):
-            # print(vertex)
-            vertex = viewport[r]
-            if clip[2, r] > 0:  # in front of camera
-                screen = vertex[:2]
-                pygame.draw.circle(surface, (255, 0, 0), screen, radius)
-                # if np.isfinite(screen).all():
-                #     # print(screen)
+        for obj in scene.children:
+            if isinstance(obj, Mesh):
+                obj.update_model_matrix()
+                obj.update_bounding_sphere()
 
+                # print(obj.bounding_sphere.centre, obj.bounding_sphere.radius)
 
-    def draw_triangles(self, camera: Camera, mesh: Mesh, surface: pygame.Surface):
-        clip, viewport = self.transform(camera, mesh, surface)
+                if obj.bounding_sphere.in_frustum(camera.frustum):
+                    clip, viewport = self.transform(camera, obj, surface)
 
-        for i in range(0, mesh.geometry.index_buffer.shape[0], 3):
-            indices = mesh.geometry.index_buffer[i:i + 3]
+                    self.draw_triangles(clip, viewport, mesh.geometry.index_buffer, surface)
 
-            c0 = clip[:3, indices[0]].T
-            c1 = clip[:3, indices[1]].T
-            c2 = clip[:3, indices[2]].T
+                    mesh_count += 1
+
+        # print(camera.frustum.far.normal, camera.frustum.far.distance)
+        # print(camera.frustum.far.signed_distance_to(scene.children[0].bounding_sphere.centre))
+
+        return mesh_count
+
+    def draw_triangles(self, clip: NDArray, viewport: NDArray, index_buffer: NDArray, surface: pygame.Surface):
+        # clip, viewport = self.transform(camera, mesh, surface)
+
+        width, height = surface.get_size()
+
+        surface.lock()
+
+        for i in range(0, index_buffer.shape[0], 3):
+            indices = index_buffer[i:i + 3]
+
+            c0 = clip[:, indices[0]].T
+            c1 = clip[:, indices[1]].T
+            c2 = clip[:, indices[2]].T
 
             # if clip[2, indices[0]] > 0 or clip[2, indices[1]] > 0 or clip[2, indices[2]] > 0:
-            if c0[2] > 0 or c1[2] > 0 or c2[2] > 0:
+            if c0[2] > 0 or c1[2] > 0 or c2[2] > 0 and c0[3] != 0 and c1[3] != 0 and c2[3] != 0:
                 s0 = viewport[indices[0]][:2]
                 s1 = viewport[indices[1]][:2]
                 s2 = viewport[indices[2]][:2]
 
                 if not self.face_culling or self.front_facing(c0, c1, c2):
-                    if self.on_surface(surface, s0) and self.on_surface(surface, s1) and self.on_surface(surface, s2):
+                    if self.on_surface(width, height, s0) and self.on_surface(width, height, s1) and self.on_surface(width, height, s2):
                         pygame.draw.polygon(surface, (255, 0, 0), [s0, s1, s2])
+
+        surface.unlock()
+
+    def draw_points(self, camera: Camera, mesh: Mesh, surface: pygame.Surface, radius: int = 2):
+        clip, viewport = self.transform(camera, mesh, surface)
+
+        for r in range(viewport.shape[0]):
+            vertex = viewport[r]
+            if clip[2, r] > 0:  # in front of camera
+                screen = vertex[:2]
+                pygame.gfxdraw.filled_circle(surface, int(screen[0]), int(screen[1]), radius, (255, 0, 0))
+
+    # def draw_triangles(self, camera: Camera, mesh: Mesh, surface: pygame.Surface):
+    #     clip, viewport = self.transform(camera, mesh, surface)
+    #
+    #     width, height = surface.get_size()
+    #
+    #     for i in range(0, mesh.geometry.index_buffer.shape[0], 3):
+    #         indices = mesh.geometry.index_buffer[i:i + 3]
+    #
+    #         c0 = clip[:3, indices[0]].T
+    #         c1 = clip[:3, indices[1]].T
+    #         c2 = clip[:3, indices[2]].T
+    #
+    #         # if clip[2, indices[0]] > 0 or clip[2, indices[1]] > 0 or clip[2, indices[2]] > 0:
+    #         if c0[2] > 0 or c1[2] > 0 or c2[2] > 0:
+    #             s0 = viewport[indices[0]][:2]
+    #             s1 = viewport[indices[1]][:2]
+    #             s2 = viewport[indices[2]][:2]
+    #
+    #             if not self.face_culling or self.front_facing(c0, c1, c2):
+    #                 if self.on_surface(width, height, s0) and self.on_surface(width, height, s1) and self.on_surface(width, height, s2):
+    #                     # pygame.draw.polygon(surface, (255, 0, 0), [s0, s1, s2])
+    #                     pygame.gfxdraw.filled_trigon(surface, int(s0[0]), int(s0[1]), int(s1[0]), int(s1[1]), int(s2[0]), int(s2[1]), (255, 0, 0))
 
 
 CAMERA_SPEED = 5
+LOOK_SPEED = np.pi * 2
+TIME_LOG_PATH = "time.pickle"
 
 
 if __name__ == '__main__':
+    try:
+        with open(TIME_LOG_PATH, "rb") as f:
+            runs = pickle.load(f)
+    except:
+        runs = []
+
     screen = pygame.display.set_mode((500, 500))
     font = pygame.freetype.SysFont("Segoe UI", 24)
 
-    camera = Camera(1.0, 3.0, 0.5)
-    camera.position = np.array([0, 0, 10], dtype=np.float64)
+    camera = Camera(1.0, 1000.0, 0.5)
+    # camera.position = np.array([0, 0, 10], dtype=np.float64)
     # print(camera.model_matrix, camera.view_matrix)
     # camera._view_matrix = compose_matrix(np.array([0, 0, -10]), np.ones((3,)), np.identity(3))
     renderer = Renderer()
@@ -325,7 +533,7 @@ if __name__ == '__main__':
         [1, -1, 1],  # bottom right front 5
         [-1, 1, 1],  # top left front 6
         [1, 1, 1],  # top right front 7
-    ])
+    ]).T
     index_buffer = np.array([
         # front
         0, 2, 1,
@@ -354,7 +562,27 @@ if __name__ == '__main__':
     geometry.index_buffer = index_buffer
     material = None
     mesh = Mesh(geometry, material)
-    meshes = [Mesh(geometry, material) for i in range(100)]
+
+    def make_cube(x, y, z):
+        cube = Mesh(geometry, material)
+        cube.position = np.array([x, y, z])
+        return cube
+
+    side_count = 5
+    slice_count = side_count * side_count
+    scale_factor = 10
+    offset = -(side_count - 1) * scale_factor / 2
+    # print(side_count * scale_factor)
+    # print(offset)
+
+    meshes = [make_cube(
+        i // slice_count * scale_factor + offset,
+        (i % slice_count) // side_count * scale_factor + offset,
+        (i % slice_count) % side_count * scale_factor + offset,
+    ) for i in range(side_count * side_count * side_count)]
+    scene = Scene()
+    scene.children = meshes
+    # scene.children.append(mesh)
 
     # world = mesh.model_matrix.dot(vertex_buffer)
     # print(world)
@@ -367,9 +595,16 @@ if __name__ == '__main__':
 
     delta_times = []
 
-    while True:
+    start_time = time.time()
+    run_time = 500
+
+    frame_count = 0
+
+    while time.time() - start_time < run_time:
+        frame_count += 1
+
         delta_time = clock.tick() / 1000
-        time = pygame.time.get_ticks() / 1000
+        t = pygame.time.get_ticks() / 1000
 
         events = pygame.event.get()
 
@@ -383,19 +618,29 @@ if __name__ == '__main__':
             camera.position += np.array([-CAMERA_SPEED * delta_time, 0, 0])
         if keys[pygame.K_d]:
             camera.position += np.array([CAMERA_SPEED * delta_time, 0, 0])
+        if keys[pygame.K_LEFT]:
+            camera.rotation = camera.rotation.dot(rotation_matrix_y(LOOK_SPEED * delta_time))
+        if keys[pygame.K_RIGHT]:
+            camera.rotation = camera.rotation.dot(rotation_matrix_y(-LOOK_SPEED * delta_time))
+        if keys[pygame.K_UP]:
+            camera.rotation = camera.rotation.dot(rotation_matrix_x(-LOOK_SPEED * delta_time))
+        if keys[pygame.K_DOWN]:
+            camera.rotation = camera.rotation.dot(rotation_matrix_x(LOOK_SPEED * delta_time))
 
-        mesh.rotation = rotation_matrix_x(time).dot(rotation_matrix_y(time).dot(rotation_matrix_z(time)))
-        mesh.scale = np.array([np.sin(time) + 2, np.sin(time) + 2, np.sin(time) + 2])
-        mesh.position = np.array([np.sin(time) * 10, 0, 0])
+        mesh.rotation = rotation_matrix_x(t).dot(rotation_matrix_y(t).dot(rotation_matrix_z(t)))
+        # mesh.scale = np.array([np.sin(t) + 2, np.sin(t) + 2, np.sin(t) + 2])
+        mesh.position = np.array([np.sin(t) * 10, 0, 0])
 
         screen.fill((255, 255, 255))
 
-        renderer.draw_points(camera, mesh, screen)
-        renderer.draw_triangles(camera, mesh, screen)
+        # renderer.draw_points(camera, mesh, screen)
+        # renderer.draw_triangles(camera, mesh, screen)
+        #
+        # for mesh in meshes:
+        #     renderer.draw_points(camera, mesh, screen)
+        #     renderer.draw_triangles(camera, mesh, screen)
 
-        for mesh in meshes:
-            renderer.draw_points(camera, mesh, screen)
-            renderer.draw_triangles(camera, mesh, screen)
+        mesh_count = renderer.draw_scene(scene, camera, screen)
 
         if delta_time != 0:
             delta_times.append(delta_time)
@@ -406,4 +651,32 @@ if __name__ == '__main__':
             font.render_to(screen, (10, 10), f"{1 / delta_time:.1f}", (0, 0, 0))
             font.render_to(screen, (10, 50), f"{1 / (sum(delta_times) / len(delta_times)):.1f}", (0, 0, 0))
 
+        font.render_to(screen, (10, 90), f"{time.time() - start_time:.1f}", (0, 0, 0))
+        font.render_to(screen, (10, 130), f"{mesh_count}", (0, 0, 0))
+
         pygame.display.flip()
+
+    average_fps = frame_count / run_time
+
+    with open("main.py", "rb") as f:
+        program_hash = hashlib.sha256(f.read()).hexdigest()
+
+    run_stats = (average_fps, run_time, frame_count, program_hash)
+
+    runs.append(run_stats)
+
+    with open(TIME_LOG_PATH, "wb") as f:
+        pickle.dump(runs, f)
+
+    program_stats = list(map(lambda x: x[0], filter(lambda x: x[3] == program_hash, runs)))
+
+    print("all runs:")
+    print(runs)
+
+    print("this run:")
+    print(average_fps)
+    print(run_stats)
+
+    print("averaged runs:")
+    print(sum(program_stats) / len(program_stats))
+
