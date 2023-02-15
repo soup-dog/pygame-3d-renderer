@@ -421,6 +421,8 @@ class Renderer:
         camera.update_camera_matrix()
         camera.update_frustum()
 
+        triangles = []
+
         mesh_count = 0
 
         for obj in scene.children:
@@ -433,21 +435,29 @@ class Renderer:
                 if obj.bounding_sphere.in_frustum(camera.frustum):
                     clip, viewport = self.transform(camera, obj, surface)
 
-                    self.draw_triangles(clip, viewport, mesh.geometry.index_buffer, mesh.geometry.colour_buffer, surface)
+                    triangles.extend(self.make_triangles(clip, viewport, mesh.geometry.index_buffer, mesh.geometry.colour_buffer, surface))
 
                     mesh_count += 1
 
-        # print(camera.frustum.far.normal, camera.frustum.far.distance)
-        # print(camera.frustum.far.signed_distance_to(scene.children[0].bounding_sphere.centre))
+        # print(triangles)
+        triangles.sort(reverse=True, key=lambda x: max(x[0][2], x[1][2], x[2][2]))
+        # triangles.sort(reverse=True, key=lambda x: x[0][2] + x[1][2] + x[2][2] + max(x[0][2], x[1][2], x[2][2]))
+        # print(triangles)
+
+        surface.lock()
+
+        for triangle in triangles:
+            s0, s1, s2, colour = triangle
+            pygame.gfxdraw.filled_trigon(surface, int(s0[0]), int(s0[1]), int(s1[0]), int(s1[1]), int(s2[0]), int(s2[1]), colour)
+
+        surface.unlock()
 
         return mesh_count
 
-    def draw_triangles(self, clip: NDArray, viewport: NDArray, index_buffer: NDArray, colour_buffer: NDArray, surface: pygame.Surface):
+    def make_triangles(self, clip: NDArray, viewport: NDArray, index_buffer: NDArray, colour_buffer: NDArray, surface: pygame.Surface):
         # clip, viewport = self.transform(camera, mesh, surface)
 
         width, height = surface.get_size()
-
-        surface.lock()
 
         for i in range(0, index_buffer.shape[0], 3):
             indices = index_buffer[i:i + 3]
@@ -458,17 +468,13 @@ class Renderer:
 
             # if clip[2, indices[0]] > 0 or clip[2, indices[1]] > 0 or clip[2, indices[2]] > 0:
             if c0[0] > 0 or c1[0] > 0 or c2[0] > 0 and c0[1] != 0 and c1[1] != 0 and c2[1] != 0:
-                s0 = viewport[indices[0]][:2]
-                s1 = viewport[indices[1]][:2]
-                s2 = viewport[indices[2]][:2]
+                s0 = viewport[indices[0]][:3]
+                s1 = viewport[indices[1]][:3]
+                s2 = viewport[indices[2]][:3]
 
                 if not self.face_culling or self.front_facing(c0, c1, c2):
                     if self.on_surface(width, height, s0) and self.on_surface(width, height, s1) and self.on_surface(width, height, s2):
-                        # print(colour_buffer[i // 3])
-                        pygame.gfxdraw.filled_trigon(surface, int(s0[0]), int(s0[1]), int(s1[0]), int(s1[1]),
-                                                     int(s2[0]), int(s2[1]), colour_buffer[i // 3])
-
-        surface.unlock()
+                        yield s0, s1, s2, colour_buffer[i // 3]
 
     def draw_points(self, camera: Camera, mesh: Mesh, surface: pygame.Surface, radius: int = 2):
         clip, viewport = self.transform(camera, mesh, surface)
@@ -504,7 +510,7 @@ class Renderer:
 
 
 CAMERA_SPEED = 5
-LOOK_SPEED = np.pi * 2
+LOOK_SPEED = np.pi * 1
 TIME_LOG_PATH = "time.pickle"
 
 
@@ -556,11 +562,27 @@ if __name__ == '__main__':
         1, 3, 5,
         3, 7, 5,
     ])
-    colour_buffer = np.array([index_buffer[i: i + 3] / vertex_buffer.shape[1] * 255 for i in range(0, len(index_buffer), 3)])
-    print(colour_buffer)
-
-
-    # print(vertex_buffer)
+    # colour_buffer = np.array([index_buffer[i: i + 3] / vertex_buffer.shape[1] * 255 for i in range(0, len(index_buffer), 3)])
+    colour_buffer = np.array([
+        # front
+        [255, 0, 0],
+        [255, 0, 0],
+        # back
+        [0, 255, 0],
+        [0, 255, 0],
+        # bottom
+        [0, 0, 255],
+        [0, 0, 255],
+        # top
+        [255, 255, 0],
+        [255, 255, 0],
+        # left
+        [255, 0, 255],
+        [255, 0, 255],
+        # right
+        [0, 255, 255],
+        [0, 255, 255],
+    ])
 
     geometry = Geometry()
     geometry.vertex_buffer = vertex_buffer
@@ -633,9 +655,9 @@ if __name__ == '__main__':
         if keys[pygame.K_DOWN]:
             camera.rotation = camera.rotation.dot(rotation_matrix_x(LOOK_SPEED * delta_time))
 
-        mesh.rotation = rotation_matrix_x(t).dot(rotation_matrix_y(t).dot(rotation_matrix_z(t)))
+        # mesh.rotation = rotation_matrix_x(t).dot(rotation_matrix_y(t).dot(rotation_matrix_z(t)))
         # mesh.scale = np.array([np.sin(t) + 2, np.sin(t) + 2, np.sin(t) + 2])
-        mesh.position = np.array([np.sin(t) * 10, 0, 0])
+        # mesh.position = np.array([np.sin(t) * 10, 0, 0])
 
         screen.fill((255, 255, 255))
 
