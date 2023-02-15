@@ -335,13 +335,13 @@ class Mesh(Object3D):
 
 
 class Camera(Object3D):
-    def __init__(self, s: float, f: float, n: float):
+    def __init__(self, s: float, f: float, n: float, fov: float = np.pi * 0.5, aspect: float = 1):
         super().__init__()
         self.s: float = s
         self.f: float = f
         self.n: float = n
-        self.fov: float = np.pi * 0.5
-        self.aspect: float = 1
+        self.fov: float = fov
+        self.aspect: float = aspect
         self.frustum: Frustum = Frustum.from_camera(self, self.fov, self.aspect)
         self.projection_matrix: NDArray = perspective_matrix(s, f, n)
         self.view_matrix: NDArray = np.identity(4)
@@ -433,7 +433,7 @@ class Renderer:
                 if obj.bounding_sphere.in_frustum(camera.frustum):
                     clip, viewport = self.transform(camera, obj, surface)
 
-                    self.draw_triangles(clip, viewport, mesh.geometry.index_buffer, surface)
+                    self.draw_triangles(clip, viewport, mesh.geometry.index_buffer, mesh.geometry.colour_buffer, surface)
 
                     mesh_count += 1
 
@@ -442,7 +442,7 @@ class Renderer:
 
         return mesh_count
 
-    def draw_triangles(self, clip: NDArray, viewport: NDArray, index_buffer: NDArray, surface: pygame.Surface):
+    def draw_triangles(self, clip: NDArray, viewport: NDArray, index_buffer: NDArray, colour_buffer: NDArray, surface: pygame.Surface):
         # clip, viewport = self.transform(camera, mesh, surface)
 
         width, height = surface.get_size()
@@ -452,19 +452,21 @@ class Renderer:
         for i in range(0, index_buffer.shape[0], 3):
             indices = index_buffer[i:i + 3]
 
-            c0 = clip[:, indices[0]].T
-            c1 = clip[:, indices[1]].T
-            c2 = clip[:, indices[2]].T
+            c0 = clip[2:, indices[0]].flatten()
+            c1 = clip[2:, indices[1]].flatten()
+            c2 = clip[2:, indices[2]].flatten()
 
             # if clip[2, indices[0]] > 0 or clip[2, indices[1]] > 0 or clip[2, indices[2]] > 0:
-            if c0[2] > 0 or c1[2] > 0 or c2[2] > 0 and c0[3] != 0 and c1[3] != 0 and c2[3] != 0:
+            if c0[0] > 0 or c1[0] > 0 or c2[0] > 0 and c0[1] != 0 and c1[1] != 0 and c2[1] != 0:
                 s0 = viewport[indices[0]][:2]
                 s1 = viewport[indices[1]][:2]
                 s2 = viewport[indices[2]][:2]
 
                 if not self.face_culling or self.front_facing(c0, c1, c2):
                     if self.on_surface(width, height, s0) and self.on_surface(width, height, s1) and self.on_surface(width, height, s2):
-                        pygame.draw.polygon(surface, (255, 0, 0), [s0, s1, s2])
+                        # print(colour_buffer[i // 3])
+                        pygame.gfxdraw.filled_trigon(surface, int(s0[0]), int(s0[1]), int(s1[0]), int(s1[1]),
+                                                     int(s2[0]), int(s2[1]), colour_buffer[i // 3])
 
         surface.unlock()
 
@@ -554,12 +556,16 @@ if __name__ == '__main__':
         1, 3, 5,
         3, 7, 5,
     ])
+    colour_buffer = np.array([index_buffer[i: i + 3] / vertex_buffer.shape[1] * 255 for i in range(0, len(index_buffer), 3)])
+    print(colour_buffer)
+
 
     # print(vertex_buffer)
 
     geometry = Geometry()
     geometry.vertex_buffer = vertex_buffer
     geometry.index_buffer = index_buffer
+    geometry.colour_buffer = colour_buffer
     material = None
     mesh = Mesh(geometry, material)
 
