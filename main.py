@@ -19,11 +19,11 @@ np.set_printoptions(suppress=True)
 pygame.init()
 
 
-def perspective_matrix(s: float, f: float, n: float) -> NDArray:
+def perspective_matrix(scale: float, far: float, near: float, aspect: float) -> NDArray:
     return np.array([
-        [s, 0, 0, 0],
-        [0, s, 0, 0],
-        [0, 0, (f + n) / (n - f), 2 * f * n / (n - f)],
+        [scale / aspect, 0, 0, 0],
+        [0, scale, 0, 0],
+        [0, 0, (far + near) / (near - far), 2 * far * near / (near - far)],
         [0, 0, -1, 0],
     ])
 
@@ -111,7 +111,7 @@ def magnitude(v: NDArray) -> float:
     return np.sqrt(magnitude_squared(v))
 
 
-def normalise(v: NDArray) -> float:
+def normalise(v: NDArray) -> NDArray:
     return v / magnitude(v)
 
 
@@ -156,13 +156,12 @@ class Frustum:
     @staticmethod
     def from_camera(camera: Camera, fov: float, aspect: float) -> Frustum:
         # from https://learnopengl.com/Guest-Articles/2021/Scene/Frustum-Culling
-        # swapped left + right plane parameter positions because im a masochist
-        half_v_side = camera.f * np.tan(fov * 0.5)
+        half_v_side = camera.far * np.tan(fov * 0.5)
         half_h_side = half_v_side * aspect
-        far = camera.f * camera.front
+        far = camera.far * camera.front
 
         return Frustum(
-            near=Plane.from_point_normal(camera.position + camera.n * camera.front, camera.front),  # near
+            near=Plane.from_point_normal(camera.position + camera.near * camera.front, camera.front),  # near
             far=Plane.from_point_normal(camera.position + far, -camera.front),  # far
             left=Plane.from_point_normal(camera.position, np.cross(camera.up, far + camera.right * half_h_side)),  # left
             right=Plane.from_point_normal(camera.position, np.cross(far - camera.right * half_h_side, camera.up)),  # right
@@ -335,20 +334,43 @@ class Mesh(Object3D):
 
 
 class Camera(Object3D):
-    def __init__(self, s: float, f: float, n: float, fov: float = np.pi * 0.5, aspect: float = 1):
+    def __init__(self, far: float, near: float, frustum_scale: float = None, fov: float = None, aspect: float = 1):
         super().__init__()
-        self.s: float = s
-        self.f: float = f
-        self.n: float = n
-        self.fov: float = fov
+        if fov is not None:
+            self.fov: float = fov
+        if frustum_scale is not None:
+            self.frustum_scale: float = frustum_scale
+        if frustum_scale is None and fov is None:
+            self._frustum_scale: float = 1
+            self._fov: float = np.pi * 0.5
+        self.far: float = far
+        self.near: float = near
         self.aspect: float = aspect
         self.frustum: Frustum = Frustum.from_camera(self, self.fov, self.aspect)
-        self.projection_matrix: NDArray = perspective_matrix(s, f, n)
+        self.projection_matrix: NDArray = perspective_matrix(self.frustum_scale, self.far, self.near, self.aspect)
         self.view_matrix: NDArray = np.identity(4)
         self.camera_matrix: NDArray = self.projection_matrix
 
+    @property
+    def frustum_scale(self):
+        return self._frustum_scale
+
+    @frustum_scale.setter
+    def frustum_scale(self, value):
+        self._frustum_scale = value
+        self._fov = np.arctan(1 / self._frustum_scale) * 2
+
+    @property
+    def fov(self):
+        return self._fov
+
+    @fov.setter
+    def fov(self, value):
+        self._fov = value
+        self._frustum_scale = 1 / np.tan(self._fov / 2)
+
     def update_projection_matrix(self):
-        self.projection_matrix = perspective_matrix(self.s, self.f, self.n)
+        self.projection_matrix = perspective_matrix(self.frustum_scale, self.far, self.near, self.aspect)
 
     def update_view_matrix(self):
         self.update_model_matrix()
@@ -413,7 +435,7 @@ class Renderer:
         )
         ndc = (clip / clip[3])[:3]
         size = surface.get_size()
-        viewport = self.viewport_transform(ndc, 0, 0, size[0], size[1], camera.f, camera.n).T
+        viewport = self.viewport_transform(ndc, 0, 0, size[0], size[1], camera.far, camera.near).T
 
         return clip, viewport
 
@@ -524,7 +546,7 @@ if __name__ == '__main__':
     screen = pygame.display.set_mode((500, 500))
     font = pygame.freetype.SysFont("Segoe UI", 24)
 
-    camera = Camera(1.0, 1000.0, 0.5)
+    camera = Camera(1000.0, 0.5, aspect=screen.get_width() / screen.get_height())
     # camera.position = np.array([0, 0, 10], dtype=np.float64)
     # print(camera.model_matrix, camera.view_matrix)
     # camera._view_matrix = compose_matrix(np.array([0, 0, -10]), np.ones((3,)), np.identity(3))
