@@ -16,7 +16,6 @@ import numpy as np
 from numpy.typing import NDArray
 from line_profiler_pycharm import profile
 
-
 np.set_printoptions(suppress=True)
 pygame.init()
 
@@ -151,7 +150,7 @@ class Plane:
         )
 
     def signed_distance_to(self, point: NDArray) -> float:
-        return np.dot(self.normal, point) + self.distance
+        return dot_vec3(self.normal, point) + self.distance
 
 
 class Frustum:
@@ -173,10 +172,14 @@ class Frustum:
         return Frustum(
             near=Plane.from_point_normal(camera.position + camera.near * camera.front, camera.front),  # near
             far=Plane.from_point_normal(camera.position + far, -camera.front),  # far
-            left=Plane.from_point_normal(camera.position, cross_vec3(camera.up, far + camera.right * half_h_side)),  # left
-            right=Plane.from_point_normal(camera.position, cross_vec3(far - camera.right * half_h_side, camera.up)),  # right
-            top=Plane.from_point_normal(camera.position, cross_vec3(camera.right, far - camera.up * half_v_side)),  # top
-            bottom=Plane.from_point_normal(camera.position, cross_vec3(far + camera.up * half_v_side, camera.right)),  # bottom
+            left=Plane.from_point_normal(camera.position, cross_vec3(camera.up, far + camera.right * half_h_side)),
+            # left
+            right=Plane.from_point_normal(camera.position, cross_vec3(far - camera.right * half_h_side, camera.up)),
+            # right
+            top=Plane.from_point_normal(camera.position, cross_vec3(camera.right, far - camera.up * half_v_side)),
+            # top
+            bottom=Plane.from_point_normal(camera.position, cross_vec3(far + camera.up * half_v_side, camera.right)),
+            # bottom
         )
 
 
@@ -190,7 +193,7 @@ class BoundingSphere:
     def above_plane(self, plane: Plane):
         return plane.signed_distance_to(self.centre) > -self.radius
 
-    def in_frustum(self, frustum: Frustum):\
+    def in_frustum(self, frustum: Frustum):
         return self.above_plane(frustum.near) \
             and self.above_plane(frustum.far) \
             and self.above_plane(frustum.left) \
@@ -326,7 +329,7 @@ class Object3D:
     def position(self, value):
         self._position = value
         self.model_matrix_needs_update = True
-    
+
     @property
     def scale(self):
         return self._scale
@@ -455,14 +458,16 @@ class Renderer:
         return camera_matrix.dot(model_matrix).dot(vertex_buffer)
 
     @staticmethod
-    def viewport_transform(ndc: NDArray, x: float, y: float, width: float, height: float, f: float, n: float) -> NDArray:
+    def viewport_transform(ndc: NDArray, x: float, y: float, width: float, height: float, f: float,
+                           n: float) -> NDArray:
         half_width = width / 2
         half_height = height / 2
 
         # print(np.array([[half_width, half_height, (f - n) / 2]]).T)
         # print(np.array([[x + half_width, y + half_height, (f + n) / 2]]).T)
 
-        return ndc * np.array([[half_width, half_height, (f - n) / 2]]).T + np.array([[x + half_width, y + half_height, (f + n) / 2]]).T
+        return ndc * np.array([[half_width, half_height, (f - n) / 2]]).T + np.array(
+            [[x + half_width, y + half_height, (f + n) / 2]]).T
         # return ndc + np.array([[2, 1, 1]]).T
 
     @staticmethod
@@ -504,7 +509,9 @@ class Renderer:
                 if obj.bounding_sphere.in_frustum(camera.frustum):
                     clip, viewport = self.transform(camera, obj, surface)
 
-                    triangles.extend(self.make_triangles(clip, viewport, mesh.geometry.index_buffer, mesh.geometry.colour_buffer, surface))
+                    triangles.extend(
+                        self.make_triangles(clip, viewport, mesh.geometry.index_buffer, mesh.geometry.colour_buffer,
+                                            surface))
 
                     mesh_count += 1
 
@@ -517,13 +524,15 @@ class Renderer:
 
         for triangle in triangles:
             s0, s1, s2, colour = triangle
-            pygame.gfxdraw.filled_trigon(surface, int(s0[0]), int(s0[1]), int(s1[0]), int(s1[1]), int(s2[0]), int(s2[1]), colour)
+            pygame.gfxdraw.filled_trigon(surface, int(s0[0]), int(s0[1]), int(s1[0]), int(s1[1]), int(s2[0]),
+                                         int(s2[1]), colour)
 
         surface.unlock()
 
         return mesh_count
 
-    def make_triangles(self, clip: NDArray, viewport: NDArray, index_buffer: NDArray, colour_buffer: NDArray, surface: pygame.Surface):
+    def make_triangles(self, clip: NDArray, viewport: NDArray, index_buffer: NDArray, colour_buffer: NDArray,
+                       surface: pygame.Surface):
         # clip, viewport = self.transform(camera, mesh, surface)
 
         width, height = surface.get_size()
@@ -542,7 +551,8 @@ class Renderer:
                 s2 = viewport[indices[2]][:3]
 
                 if not self.face_culling or self.front_facing(c0, c1, c2):
-                    if self.on_surface(width, height, s0) and self.on_surface(width, height, s1) and self.on_surface(width, height, s2):
+                    if self.on_surface(width, height, s0) and self.on_surface(width, height, s1) and self.on_surface(
+                            width, height, s2):
                         yield s0, s1, s2, colour_buffer[i // 3]
 
     def draw_points(self, camera: Camera, mesh: Mesh, surface: pygame.Surface, radius: int = 2):
@@ -581,7 +591,6 @@ class Renderer:
 CAMERA_SPEED = 5
 LOOK_SPEED = np.pi * 1
 TIME_LOG_PATH = "time.pickle"
-
 
 if __name__ == '__main__':
     try:
@@ -660,10 +669,12 @@ if __name__ == '__main__':
     material = None
     mesh = Mesh(geometry, material)
 
+
     def make_cube(x, y, z):
         cube = Mesh(geometry, material)
         cube.position = np.array([x, y, z])
         return cube
+
 
     side_count = 5
     slice_count = side_count * side_count
@@ -708,13 +719,13 @@ if __name__ == '__main__':
         keys = pygame.key.get_pressed()
 
         if keys[pygame.K_w]:
-            camera.position += np.array([0, 0, -CAMERA_SPEED * delta_time])
+            camera.position += camera.front * CAMERA_SPEED * delta_time
         if keys[pygame.K_s]:
-            camera.position += np.array([0, 0, CAMERA_SPEED * delta_time])
+            camera.position += camera.front * -CAMERA_SPEED * delta_time
         if keys[pygame.K_a]:
-            camera.position += np.array([-CAMERA_SPEED * delta_time, 0, 0])
+            camera.position += camera.right * -CAMERA_SPEED * delta_time
         if keys[pygame.K_d]:
-            camera.position += np.array([CAMERA_SPEED * delta_time, 0, 0])
+            camera.position += camera.right * CAMERA_SPEED * delta_time
         if keys[pygame.K_LEFT]:
             camera.rotation = camera.rotation.dot(rotation_matrix_y(LOOK_SPEED * delta_time))
         if keys[pygame.K_RIGHT]:
@@ -776,4 +787,3 @@ if __name__ == '__main__':
 
     print("averaged runs:")
     print(sum(program_stats) / len(program_stats))
-
