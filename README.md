@@ -18,8 +18,17 @@ https://learnopengl.com/Advanced-OpenGL/Face-culling
 
 https://mathworld.wolfram.com/Plane.html
 
+https://gamedev.stackexchange.com/questions/120338/what-does-a-perspective-projection-matrix-look-like-in-opengl
+https://www.scratchapixel.com/lessons/3d-basic-rendering/perspective-and-orthographic-projection-matrix/opengl-perspective-projection-matrix.html
+
 # optimisations
 - pre-padding - 25%
 - pygame.gfxdraw vs pygame.draw - 50%
 - np.linalg.norm vs handwritten magnitude (0.520 vs 0.335 per call)
-- 
+
+# TODO
+- ~~painter's algorithm~~
+- ~~non-square aspect ratio (need fix for frustum + perspective matrix)~~
+- numba compilation
+- software rendered triangles using numba + direct access to pixels
+- z-buffer + textured triangles if fast enough
