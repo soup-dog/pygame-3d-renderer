@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
 import time
 from enum import Enum
@@ -7,6 +8,7 @@ from typing import List, Tuple
 import pickle
 import hashlib
 import timeit
+import weakref
 
 import pygame
 import pygame.gfxdraw
@@ -93,26 +95,34 @@ def compose_matrix(translation: NDArray, scale: NDArray, rotation: NDArray) -> N
 
 
 def get_scale(mat: NDArray) -> NDArray:
-    return np.array([magnitude(mat[0, :3]), magnitude(mat[1, :3]), magnitude(mat[2, :3])])
+    return np.array([magnitude_vec3(mat[0, :3]), magnitude_vec3(mat[1, :3]), magnitude_vec3(mat[2, :3])])
 
 
-def distance_squared(a: NDArray, b: NDArray) -> NDArray:
+def dot_vec3(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def distance_squared_vec3(a: NDArray, b: NDArray) -> NDArray:
     l0 = a[0] - b[0]
     l1 = a[1] - b[1]
     l2 = a[2] - b[2]
     return l0 * l0 + l1 * l1 + l2 * l2
 
 
-def magnitude_squared(v: NDArray) -> float:
+def magnitude_squared_vec3(v: NDArray) -> float:
     return v[0] * v[0] + v[1] * v[1] + v[2] * v[2]
 
 
-def magnitude(v: NDArray) -> float:
-    return np.sqrt(magnitude_squared(v))
+def magnitude_vec3(v: NDArray) -> float:
+    return np.sqrt(magnitude_squared_vec3(v))
 
 
-def normalise(v: NDArray) -> NDArray:
-    return v / magnitude(v)
+def cross_vec3(a: NDArray, b: NDArray) -> NDArray:
+    return np.array([a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]])
+
+
+def normalise_vec3(v: NDArray) -> NDArray:
+    return v / magnitude_vec3(v)
 
 
 def v3_to_column_v4(vector: NDArray) -> NDArray:
@@ -136,8 +146,8 @@ class Plane:
     @staticmethod
     def from_point_normal(point: NDArray, normal: NDArray):
         return Plane(
-            normal=normalise(normal),
-            distance=(-normal[0] * point[0] - normal[1] * point[1] - normal[2] * point[2]) / magnitude(normal)
+            normal=normalise_vec3(normal),
+            distance=(-normal[0] * point[0] - normal[1] * point[1] - normal[2] * point[2]) / magnitude_vec3(normal)
         )
 
     def signed_distance_to(self, point: NDArray) -> float:
@@ -163,10 +173,10 @@ class Frustum:
         return Frustum(
             near=Plane.from_point_normal(camera.position + camera.near * camera.front, camera.front),  # near
             far=Plane.from_point_normal(camera.position + far, -camera.front),  # far
-            left=Plane.from_point_normal(camera.position, np.cross(camera.up, far + camera.right * half_h_side)),  # left
-            right=Plane.from_point_normal(camera.position, np.cross(far - camera.right * half_h_side, camera.up)),  # right
-            top=Plane.from_point_normal(camera.position, np.cross(camera.right, far - camera.up * half_v_side)),  # top
-            bottom=Plane.from_point_normal(camera.position, np.cross(far + camera.up * half_v_side, camera.right)),  # bottom
+            left=Plane.from_point_normal(camera.position, cross_vec3(camera.up, far + camera.right * half_h_side)),  # left
+            right=Plane.from_point_normal(camera.position, cross_vec3(far - camera.right * half_h_side, camera.up)),  # right
+            top=Plane.from_point_normal(camera.position, cross_vec3(camera.right, far - camera.up * half_v_side)),  # top
+            bottom=Plane.from_point_normal(camera.position, cross_vec3(far + camera.up * half_v_side, camera.right)),  # bottom
         )
 
 
@@ -279,7 +289,7 @@ class Geometry:
         centre = np.array([(lower[0] + upper[0]) / 2, (lower[1] + upper[1]) / 2, (lower[2] + upper[2]) / 2])
         edge = upper - centre
 
-        return BoundingSphere(centre, magnitude(edge))
+        return BoundingSphere(centre, magnitude_vec3(edge))
 
         # r_squared = 0
         # for vertex in self.vertex_buffer:
@@ -292,10 +302,11 @@ class Geometry:
 
 class Object3D:
     def __init__(self):
-        self.position: NDArray = np.zeros((3,), dtype=np.float64)
-        self.scale: NDArray = np.ones((3,), dtype=np.float64)
-        self.rotation: NDArray = np.identity(3)
+        self._position: NDArray = np.zeros((3,), dtype=np.float64)
+        self._scale: NDArray = np.ones((3,), dtype=np.float64)
+        self._rotation: NDArray = np.identity(3)
         self.model_matrix = np.identity(4)
+        self.model_matrix_needs_update: bool = False
         self._front: NDArray = np.array([0, 0, -1], dtype=np.float64)
         self._up: NDArray = np.array([0, 1, 0], dtype=np.float64)
         self._right: NDArray = np.array([1, 0, 0], dtype=np.float64)
@@ -305,6 +316,34 @@ class Object3D:
         self._front = self.rotation.dot(np.array([[0], [0], [-1]], dtype=np.float64)).flatten()
         self._up = self.rotation.dot(np.array([[0], [1], [0]], dtype=np.float64)).flatten()
         self._right = self.rotation.dot(np.array([[1], [0], [0]], dtype=np.float64)).flatten()
+        self.model_matrix_needs_update = False
+
+    @property
+    def position(self):
+        return self._position
+
+    @position.setter
+    def position(self, value):
+        self._position = value
+        self.model_matrix_needs_update = True
+    
+    @property
+    def scale(self):
+        return self._scale
+
+    @scale.setter
+    def scale(self, value):
+        self._scale = value
+        self.model_matrix_needs_update = True
+
+    @property
+    def rotation(self):
+        return self._rotation
+
+    @rotation.setter
+    def rotation(self, value):
+        self._rotation = value
+        self.model_matrix_needs_update = True
 
     @property
     def front(self):
@@ -324,12 +363,19 @@ class Mesh(Object3D):
         super().__init__()
         self.geometry: Geometry = geometry
         self.material = material
+        # self._geometry_bounding_sphere_ref: weakref.ref = weakref.ref(self.geometry.bounding_sphere)
         self.bounding_sphere: BoundingSphere = geometry.bounding_sphere
+
+    # @property
+    # def bounding_sphere_needs_update(self):
+    #     geometry_bounding_sphere = self._geometry_bounding_sphere_ref()
+    #     return geometry_bounding_sphere is None or geometry_bounding_sphere is not self.geometry.bounding_sphere
 
     def update_bounding_sphere(self):
         centre = column_v4_to_v3(self.model_matrix.dot(v3_to_column_v4(self.geometry.bounding_sphere.centre)))
         max_scale = get_scale(self.model_matrix).max()
         radius = self.geometry.bounding_sphere.radius * max_scale
+        # self._geometry_bounding_sphere_ref = weakref.ref(self.geometry.bounding_sphere)
         self.bounding_sphere = BoundingSphere(centre, radius)
 
 
@@ -406,7 +452,7 @@ class Renderer:
 
     @staticmethod
     def apply_transforms(vertex_buffer: NDArray, model_matrix: NDArray, camera_matrix: NDArray) -> NDArray:
-        return camera_matrix.dot(model_matrix.dot(vertex_buffer))
+        return camera_matrix.dot(model_matrix).dot(vertex_buffer)
 
     @staticmethod
     def viewport_transform(ndc: NDArray, x: float, y: float, width: float, height: float, f: float, n: float) -> NDArray:
@@ -424,7 +470,7 @@ class Renderer:
         return 0 < point[0] < width and 0 < point[1] < height
 
     def front_facing(self, a, b, c):
-        n = np.dot(a, np.cross(b - a, c - a))
+        n = dot_vec3(a, cross_vec3(b - a, c - a))
         return n == 0 or n > 0 != self.winding_order
 
     def transform(self, camera: Camera, mesh: Mesh, surface: pygame.Surface):
@@ -449,7 +495,8 @@ class Renderer:
 
         for obj in scene.children:
             if isinstance(obj, Mesh):
-                obj.update_model_matrix()
+                if obj.model_matrix_needs_update:
+                    obj.update_model_matrix()
                 obj.update_bounding_sphere()
 
                 # print(obj.bounding_sphere.centre, obj.bounding_sphere.radius)
@@ -484,12 +531,12 @@ class Renderer:
         for i in range(0, index_buffer.shape[0], 3):
             indices = index_buffer[i:i + 3]
 
-            c0 = clip[2:, indices[0]].flatten()
-            c1 = clip[2:, indices[1]].flatten()
-            c2 = clip[2:, indices[2]].flatten()
+            c0 = clip[:, indices[0]].flatten()
+            c1 = clip[:, indices[1]].flatten()
+            c2 = clip[:, indices[2]].flatten()
 
             # if clip[2, indices[0]] > 0 or clip[2, indices[1]] > 0 or clip[2, indices[2]] > 0:
-            if c0[0] > 0 or c1[0] > 0 or c2[0] > 0 and c0[1] != 0 and c1[1] != 0 and c2[1] != 0:
+            if c0[2] > 0 or c1[2] > 0 or c2[2] > 0 and c0[3] != 0 and c1[3] != 0 and c2[3] != 0:
                 s0 = viewport[indices[0]][:3]
                 s1 = viewport[indices[1]][:3]
                 s2 = viewport[indices[2]][:3]
@@ -551,7 +598,7 @@ if __name__ == '__main__':
     # print(camera.model_matrix, camera.view_matrix)
     # camera._view_matrix = compose_matrix(np.array([0, 0, -10]), np.ones((3,)), np.identity(3))
     renderer = Renderer()
-    renderer.face_culling = False
+    # renderer.face_culling = False
 
     rotation_matrix = compose_matrix(np.ones((3,)), np.ones((3,)), rotation_matrix_z(math.pi * 0.5))
     vertex_buffer = np.array([
@@ -646,7 +693,7 @@ if __name__ == '__main__':
     delta_times = []
 
     start_time = time.time()
-    run_time = 500
+    run_time = 5
 
     frame_count = 0
 

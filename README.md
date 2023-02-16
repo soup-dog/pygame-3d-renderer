@@ -25,6 +25,8 @@ https://www.scratchapixel.com/lessons/3d-basic-rendering/perspective-and-orthogr
 - pre-padding - 25%
 - pygame.gfxdraw vs pygame.draw - 50%
 - np.linalg.norm vs handwritten magnitude (0.520 vs 0.335 per call)
+- np.dot vs handwritten dot (0.125 vs 0.107 per call)
+- np.cross vs handwritten cross (3.172 vs 0.2843 per call)
 
 # TODO
 - ~~painter's algorithm~~
