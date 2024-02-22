@@ -16,6 +16,8 @@ import numpy as np
 from numpy.typing import NDArray
 from line_profiler_pycharm import profile
 
+import draw
+
 np.set_printoptions(suppress=True)
 pygame.init()
 
@@ -144,9 +146,10 @@ class Plane:
 
     @staticmethod
     def from_point_normal(point: NDArray, normal: NDArray):
+        n_normal = normalise_vec3(normal)  # normalised normal
         return Plane(
-            normal=normalise_vec3(normal),
-            distance=(-normal[0] * point[0] - normal[1] * point[1] - normal[2] * point[2]) / magnitude_vec3(normal)
+            normal=n_normal,
+            distance=(-n_normal[0] * point[0] - n_normal[1] * point[1] - n_normal[2] * point[2])
         )
 
     def signed_distance_to(self, point: NDArray) -> float:
@@ -520,14 +523,21 @@ class Renderer:
         # triangles.sort(reverse=True, key=lambda x: x[0][2] + x[1][2] + x[2][2] + max(x[0][2], x[1][2], x[2][2]))
         # print(triangles)
 
-        surface.lock()
+        # surface.lock()
 
-        for triangle in triangles:
-            s0, s1, s2, colour = triangle
-            pygame.gfxdraw.filled_trigon(surface, int(s0[0]), int(s0[1]), int(s1[0]), int(s1[1]), int(s2[0]),
-                                         int(s2[1]), colour)
+        pixels = pygame.surfarray.pixels2d(surface)
+        try:
+            for triangle in triangles:
+                s0, s1, s2, colour = triangle
+                # pygame.gfxdraw.filled_trigon(surface, int(s0[0]), int(s0[1]), int(s1[0]), int(s1[1]), int(s2[0]),
+                #                              int(s2[1]), (255, 0, 0))
+                # print(s0[:2], s1, s2, colour)
+                draw.draw_triangle(pixels, s0[:2].astype(np.int64), s1[:2].astype(np.int64), s2[:2].astype(np.int64), colour)
+        finally:
+            # ensure pixel array is cleaned up and surface can be unlocked
+            del pixels
 
-        surface.unlock()
+        # surface.unlock()
 
         return mesh_count
 
@@ -607,7 +617,7 @@ if __name__ == '__main__':
     # print(camera.model_matrix, camera.view_matrix)
     # camera._view_matrix = compose_matrix(np.array([0, 0, -10]), np.ones((3,)), np.identity(3))
     renderer = Renderer()
-    # renderer.face_culling = False
+    # renderer.face_culling = True
 
     rotation_matrix = compose_matrix(np.ones((3,)), np.ones((3,)), rotation_matrix_z(math.pi * 0.5))
     vertex_buffer = np.array([
@@ -641,7 +651,7 @@ if __name__ == '__main__':
         3, 7, 5,
     ])
     # colour_buffer = np.array([index_buffer[i: i + 3] / vertex_buffer.shape[1] * 255 for i in range(0, len(index_buffer), 3)])
-    colour_buffer = np.array([
+    colour_buffer = np.array(list(map(screen.map_rgb, [
         # front
         [255, 0, 0],
         [255, 0, 0],
@@ -660,7 +670,7 @@ if __name__ == '__main__':
         # right
         [0, 255, 255],
         [0, 255, 255],
-    ])
+    ])), dtype=np.int32)
 
     geometry = Geometry()
     geometry.vertex_buffer = vertex_buffer
@@ -704,7 +714,7 @@ if __name__ == '__main__':
     delta_times = []
 
     start_time = time.time()
-    run_time = 5
+    run_time = 500
 
     frame_count = 0
 
