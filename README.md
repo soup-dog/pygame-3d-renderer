@@ -1,6 +1,6 @@
 # Pygame CPU 3D Renderer
 
-CPU 3d renderer written from scratch. PyGame used to draw pixels and filled triangles. 
+CPU 3d renderer written from scratch. PyGame used to draw pixels and single colour triangles. 
 
 demo (125 cubes)
 
