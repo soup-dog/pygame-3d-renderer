@@ -1,3 +1,8 @@
+# Pygame CPU 3D Renderer
+
+demo (125 cubes)
+![](demo.mp4)
+
 # resources consulted
 
 https://gabrielgambetta.com/computer-graphics-from-scratch/11-clipping.html
@@ -32,5 +37,6 @@ https://www.scratchapixel.com/lessons/3d-basic-rendering/perspective-and-orthogr
 - ~~painter's algorithm~~
 - ~~non-square aspect ratio (need fix for frustum + perspective matrix)~~
 - numba compilation
-- software rendered triangles using numba + direct access to pixels
-- z-buffer + textured triangles if fast enough
+- ~~software rendered triangles using numba + direct access to pixels~~
+- ~~z-buffer + textured triangles if fast enough~~
+- enable software rendered triangles in renderer with different render modes

@@ -598,6 +598,12 @@ class Renderer:
     #                     pygame.gfxdraw.filled_trigon(surface, int(s0[0]), int(s0[1]), int(s1[0]), int(s1[1]), int(s2[0]), int(s2[1]), (255, 0, 0))
 
 
+# draw_points
+# draw_lines?
+# draw_fast_colour: fastest, uses gfxdraw, no z-buffer, never intended to be used with other draw modes
+# draw_scene: slowest, uses interpolated drawing methods, z-buffer
+
+
 CAMERA_SPEED = 5
 LOOK_SPEED = np.pi * 1
 TIME_LOG_PATH = "time.pickle"
