@@ -1,9 +1,12 @@
 # Pygame CPU 3D Renderer
 
 demo (125 cubes)
-![](demo.mp4)
+
 
 # resources consulted
+
+https://github.com/user-attachments/assets/669fd0e8-540d-4834-a710-1871c6c5b28b
+
 
 https://gabrielgambetta.com/computer-graphics-from-scratch/11-clipping.html
 https://gabrielgambetta.com/computer-graphics-from-scratch/09-perspective-projection.html
